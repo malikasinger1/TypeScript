@@ -14524,11 +14524,15 @@ namespace ts {
 
         // Emitter support
 
-        function getCapturedBlockScopedNames(iterationStatement: IterationStatement): CapturedBlockScopedName[] {
-            const nodeLinks = getNodeLinks(iterationStatement);
+        function getCapturedBlockScopedNames(node: IterationStatement): CapturedBlockScopedName[] {
+            const nodeLinks = getNodeLinks(node);
             return nodeLinks.capturedBlockScopedNames && nodeLinks.capturedBlockScopedNames.list;
         }
-        
+
+        function isArgumentsLocalBinding(node: Identifier): boolean {
+            return getReferencedValueSymbol(node) === argumentsSymbol;
+        }
+
         // When resolved as an expression identifier, if the given node references an exported entity, return the declaration
         // node of the exported entity's container. Otherwise, return undefined.
         function getReferencedExportContainer(node: Identifier): SourceFile | ModuleDeclaration | EnumDeclaration {
@@ -14834,7 +14838,8 @@ namespace ts {
                 getReferencedValueDeclaration,
                 getTypeReferenceSerializationKind,
                 isOptionalParameter,
-                getCapturedBlockScopedNames
+                getCapturedBlockScopedNames,
+                isArgumentsLocalBinding
             };
         }
 

@@ -1601,7 +1601,8 @@ namespace ts {
         getReferencedValueDeclaration(reference: Identifier): Declaration;
         getTypeReferenceSerializationKind(typeName: EntityName): TypeReferenceSerializationKind;
         isOptionalParameter(node: ParameterDeclaration): boolean;
-        getCapturedBlockScopedNames(iterationStatement: IterationStatement): CapturedBlockScopedName[];
+        getCapturedBlockScopedNames(node: IterationStatement): CapturedBlockScopedName[];
+        isArgumentsLocalBinding(node: Identifier): boolean;
     }
 
     export const enum SymbolFlags {

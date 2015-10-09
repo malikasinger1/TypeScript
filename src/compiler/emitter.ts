@@ -389,6 +389,9 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, Promi
             hasNonLabeledContinue?: boolean;
 
             inNestedNonLiftedLoop?: boolean;
+
+            argumentsName?: string;
+            hoistedLocalVariables?: Identifier[];
         }
 
         function setLabeledJump(state: LiftedLoopState, isBreak: boolean, labelText: string, labelMarker: string): void {
@@ -403,6 +406,25 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, Promi
                     state.labeledNonLocalContinues = {};
                 }
                 state.labeledNonLocalContinues[labelText] = labelMarker;
+            }
+        }
+
+        function hoistVariableDeclarationFromLoop(state: LiftedLoopState, declaration: VariableDeclaration): void {
+            if (!state.hoistedLocalVariables) {
+                state.hoistedLocalVariables = [];
+            }
+
+            visit(declaration.name)
+            
+            function visit(node: Identifier | BindingPattern) {
+                if (node.kind === SyntaxKind.Identifier) {
+                    state.hoistedLocalVariables.push((<Identifier>node));
+                }
+                else {
+                    for (const element of (<BindingPattern>node).elements) {
+                        visit(element.propertyName || element.name);
+                    }
+                }
             }
         }
 
@@ -1852,6 +1874,15 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, Promi
             }
 
             function emitIdentifier(node: Identifier) {
+                if (liftedLoopState) {
+                    if (node.text == "arguments" && resolver.isArgumentsLocalBinding(node)) {
+                        // in lifted loop body arguments cannot be used directly.
+                        let name = liftedLoopState.argumentsName || (liftedLoopState.argumentsName = makeUniqueName("arguments"));
+                        write(name);
+                        return;
+                    }
+                }
+                
                 if (!node.parent) {
                     write(node.text);
                 }
@@ -2984,6 +3015,15 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, Promi
                     return false;
                 }
 
+                if (liftedLoopState && (getCombinedNodeFlags(decl) & NodeFlags.BlockScoped) === 0) {
+                    // we are inside a lifted loop - this can only happen in downlevel scenarios 
+                    // record names for all variable declarations
+                    for (const varDecl of decl.declarations) {
+                        hoistVariableDeclarationFromLoop(liftedLoopState, varDecl)
+                    }
+                    return false;
+                }
+
                 let tokenKind = SyntaxKind.VarKeyword;
                 if (decl && languageVersion >= ScriptTarget.ES6) {
                     if (isLet(decl)) {
@@ -3052,26 +3092,36 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, Promi
                 for (const v of capturedVariables) {
                     // if variable is defined in loop header it should be passed to loop function as parameter
                     if (v.declaration.parent.kind === SyntaxKind.VariableDeclarationList && v.declaration.parent.parent === iterationStatement) {
-                        const nameText = isNameOfNestedRedeclaration(v.name) ? getGeneratedNameForNode(v.name) : v.name.text;
+                        const nestedRedeclaration = resolver.getReferencedNestedRedeclaration(v.name);
+                        const nameText = nestedRedeclaration ? getGeneratedNameForNode(nestedRedeclaration.name) : v.name.text;
                         parameters.push(nameText);
                     }
                 }
+
                 writeLine();
                 const bodyIsBlock = iterationStatement.statement.kind === SyntaxKind.Block;
                 write(`var ${functionName} = function(${parameters.join(", ")})`);
+
                 if (!bodyIsBlock) {
                     write(" {");
                     writeLine();
                     increaseIndent();
                 }
 
-                const savedJumpsInLiftedLoop = liftedLoopState;
+                const previousLiftedLoopState = liftedLoopState;
                 liftedLoopState = {};
                 
+                if (previousLiftedLoopState) {
+                    if (previousLiftedLoopState.argumentsName) {
+                        liftedLoopState.argumentsName = previousLiftedLoopState.argumentsName;
+                    }
+
+                    if (previousLiftedLoopState.hoistedLocalVariables) {
+                        liftedLoopState.hoistedLocalVariables = previousLiftedLoopState.hoistedLocalVariables;
+                    }
+                }
+
                 emitEmbeddedStatement(iterationStatement.statement);
-                
-                const jumpsInCurrentLoop = liftedLoopState; 
-                liftedLoopState = savedJumpsInLiftedLoop;
 
                 if (!bodyIsBlock) {
                     decreaseIndent();
@@ -3080,8 +3130,46 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, Promi
                 }
                 write(";");
                 writeLine();
-                
-                return { functionName, parameters, state: jumpsInCurrentLoop };
+
+                if (liftedLoopState.argumentsName) {
+                    if (previousLiftedLoopState) {
+                        previousLiftedLoopState.argumentsName = liftedLoopState.argumentsName;
+                    }
+                    else {
+                        write(`var ${liftedLoopState.argumentsName} = arguments;`);
+                        writeLine();
+                    }
+                }
+
+                if (liftedLoopState.hoistedLocalVariables) {
+                    if (previousLiftedLoopState) {
+                        previousLiftedLoopState.hoistedLocalVariables = liftedLoopState.hoistedLocalVariables;
+                    }
+                    else {
+                        write("var ");
+                        // deduplicate variables
+                        let seen: Map<string>;
+                        for (const id of liftedLoopState.hoistedLocalVariables) {
+                           if (!seen) {
+                               seen = {};
+                           }
+                           else {
+                               write(", ");
+                           }
+                           if (!hasProperty(seen, id.text)) {
+                               emit(id);
+                               seen[id.text] = id.text;
+                           }
+                        }
+                        write(";");
+                        writeLine();
+                    }
+                }
+
+                const currentLoopState = liftedLoopState; 
+                liftedLoopState = previousLiftedLoopState;
+
+                return { functionName, parameters, state: currentLoopState };
             }
 
             function emitNonLiftedLoopBody(node: IterationStatement, emitAsEmbeddedStatement: boolean): void {
@@ -3158,8 +3246,7 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, Promi
                     // in case of labeled breaks emit code that either breaks to some known label inside enclosing loop or delegates jump to enclosing loop
                     emitDispatchTableForLabeledJumps(loopResult, loop.state, liftedLoopState); 
                 }
-                
-                
+
                 if (emitAsBlock) {
                     writeLine();
                     decreaseIndent();
