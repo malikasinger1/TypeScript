@@ -6552,7 +6552,7 @@ namespace ts {
                     if (inFunction) {
                         const nodeLinks = getNodeLinks(current);
                         if (!nodeLinks.capturedBlockScopedNames) {
-                            nodeLinks.capturedBlockScopedNames = { uniqieNames: {}, list: [] };
+                            nodeLinks.capturedBlockScopedNames = { uniqueNames: {}, list: [] };
                         }
                         // every pair 'name on use-site' + 'id of declaration' should be unique
                         // we want deduplicate cases when the same name is used in closure multiple times
@@ -6566,16 +6566,16 @@ namespace ts {
                         // }
                         // here the same name x might originate from different declarations
                         const name = node.text + "|" + getSymbolId(symbol);
-                        if (!hasProperty(nodeLinks.capturedBlockScopedNames.uniqieNames, name)) {
-                            nodeLinks.capturedBlockScopedNames.uniqieNames[name] = name;
+                        if (!hasProperty(nodeLinks.capturedBlockScopedNames.uniqueNames, name)) {
+                            nodeLinks.capturedBlockScopedNames.uniqueNames[name] = name;
                             nodeLinks.capturedBlockScopedNames.list.push({
                                 name: node,
                                 declaration: symbol.valueDeclaration
-                            })
+                            });
                         }
                     }
                     // mark value declaration so during emit they can have a special handling
-                    getNodeLinks(<VariableDeclaration>symbol.valueDeclaration).flags |= NodeCheckFlags.BlockScopedBindingInLoop;
+                    getNodeLinks(<VariableDeclaration>symbol.valueDeclaration).flags |= NodeCheckFlags.LoopWithBlockScopedBinding;
                     break;
                 }
                 current = current.parent;
@@ -15653,21 +15653,6 @@ namespace ts {
             else if (node.parent.kind === SyntaxKind.TypeLiteral) {
                 return checkGrammarForNonSymbolComputedProperty(node.name, Diagnostics.A_computed_property_name_in_a_type_literal_must_directly_refer_to_a_built_in_symbol);
             }
-        }
-
-        function isIterationStatement(node: Node, lookInLabeledStatements: boolean): boolean {
-            switch (node.kind) {
-                case SyntaxKind.ForStatement:
-                case SyntaxKind.ForInStatement:
-                case SyntaxKind.ForOfStatement:
-                case SyntaxKind.DoStatement:
-                case SyntaxKind.WhileStatement:
-                    return true;
-                case SyntaxKind.LabeledStatement:
-                    return lookInLabeledStatements && isIterationStatement((<LabeledStatement>node).statement, lookInLabeledStatements);
-            }
-
-            return false;
         }
 
         function checkGrammarBreakOrContinueStatement(node: BreakOrContinueStatement): boolean {

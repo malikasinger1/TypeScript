@@ -1745,8 +1745,8 @@ namespace ts {
 
         // Values for enum members have been computed, and any errors have been reported for them.
         EnumValuesComputed          = 0x00002000,
-        BlockScopedBindingInLoop    = 0x00004000,
-        LexicalModuleMergesWithClass= 0x00008000,  // Instantiated lexical module declaration is merged with a previous class declaration.
+        LoopWithBlockScopedBinding    = 0x00004000,
+        LexicalModuleMergesWithClass = 0x00008000,  // Instantiated lexical module declaration is merged with a previous class declaration. 
     }
 
     export interface CapturedBlockScopedName {
@@ -1756,7 +1756,7 @@ namespace ts {
     
     /* @internal */
     export interface CapturedBlockScopedNames {
-        uniqieNames: Map<string>;
+        uniqueNames: Map<string>;
         list: CapturedBlockScopedName[];
     } 
 
