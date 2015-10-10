@@ -3278,7 +3278,7 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, Promi
                         let labelMarker = table[labelText]
                         writeLine();
                         write(`case "${labelMarker}": `)
-                        if (!enclosingLoop || enclosingLoop.labels[labelText]) {
+                        if (!enclosingLoop || (enclosingLoop.labels && enclosingLoop.labels[labelText])) {
                             if (isBreak) {
                                 write("break ");
                             }
