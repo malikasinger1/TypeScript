@@ -1747,7 +1747,7 @@ namespace ts {
         EnumValuesComputed          = 0x00002000,
         BlockScopedBindingInLoop    = 0x00004000,
         LexicalModuleMergesWithClass = 0x00008000,  // Instantiated lexical module declaration is merged with a previous class declaration.
-        LoopWithBlockScopedBindingCapturedInFunction = 0x00010000,
+        LoopWithBlockScopedBindingCapturedInFunction = 0x00010000, // Loop that contains block scoped variable captured in closure
     }
 
     /* @internal */

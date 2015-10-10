@@ -2969,8 +2969,10 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, Promi
             }
 
             function emitDoStatement(node: DoStatement) {
-                const loop = tryLiftLoopBodyToFunction(node);
-
+                emitLoop(node, emitDoStatementWorker)
+            }
+            
+            function emitDoStatementWorker(node: DoStatement, loop: LiftedLoop) {
                 write("do");
                 if (loop) {
                     emitLiftedLoopCall(loop, /* emitAsBlock */ true);
@@ -2990,7 +2992,10 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, Promi
             }
 
             function emitWhileStatement(node: WhileStatement) {
-                const loop = tryLiftLoopBodyToFunction(node);
+                emitLoop(node, emitWhileStatementWorker);
+            }
+
+            function emitWhileStatementWorker(node: WhileStatement, loop: LiftedLoop) {
                 
                 write("while (");
                 emit(node.expression);
@@ -3081,32 +3086,61 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, Promi
                 state: LiftedLoopState;
             }
 
-            function tryLiftLoopBodyToFunction(node: IterationStatement): LiftedLoop {
-                const shouldLiftLoopBody = 
-                    languageVersion < ScriptTarget.ES6 && 
-                    resolver.getNodeCheckFlags(node) & NodeCheckFlags.LoopWithBlockScopedBindingCapturedInFunction;
+            function shouldLiftLoopBody(node: IterationStatement): boolean {
+                return languageVersion < ScriptTarget.ES6 &&
+                    (resolver.getNodeCheckFlags(node) & NodeCheckFlags.LoopWithBlockScopedBindingCapturedInFunction) !== 0;
+            }
 
-                if (!shouldLiftLoopBody) {
-                    return undefined;
+            function emitLoop(node: IterationStatement, loopEmitter: (n: IterationStatement, liftedLoop: LiftedLoop) => void): void {
+                const shouldLift = shouldLiftLoopBody(node);
+                if (!shouldLift) {
+                    loopEmitter(node, /* liftedLoopBody */ undefined);
                 }
-
+                else {
+                    // lifted loop body will introduce new variable statement.
+                    // if previously loop was parented by labeled statement then with naive emit label will be moved to this new synthesized variable statement.
+                    // to preserve correct behavior we need to wrap lifted loop body and loop into block
+                    // l0: for (let x of []) { <body> }
+                    // will become
+                    // l0 {
+                    //    var loop = function(x) { <body> }
+                    //    for (let x of []) loop(x);
+                    // }
+                    const parentIsLabeledStatement = node.parent.kind === SyntaxKind.LabeledStatement;
+                    if (parentIsLabeledStatement) {
+                        write("{");
+                        increaseIndent();
+                        writeLine();
+                    }
+                    const loop = liftLoopBodyToFunction(node);
+                    loopEmitter(node, loop);
+                    if (parentIsLabeledStatement) {
+                        decreaseIndent();
+                        writeLine();
+                        write("}");
+                    }
+                }
+            }
+            
+            function liftLoopBodyToFunction(node: IterationStatement): LiftedLoop {
                 const functionName = makeUniqueName("_loop");
 
-                let loopHeaderDeclarations: VariableDeclarationList;
+                let loopInitializer: VariableDeclarationList;
                 switch (node.kind) {
                     case SyntaxKind.ForStatement:
                     case SyntaxKind.ForInStatement:
                     case SyntaxKind.ForOfStatement:
                         if ((<ForStatement | ForInStatement | ForOfStatement>node).initializer.kind === SyntaxKind.VariableDeclarationList) {
-                            loopHeaderDeclarations = <VariableDeclarationList>(<ForStatement | ForInStatement | ForOfStatement>node).initializer;
+                            loopInitializer = <VariableDeclarationList>(<ForStatement | ForInStatement | ForOfStatement>node).initializer;
                         }
                         break;
                 }
 
                 let loopParameters: string[];
-                if (loopHeaderDeclarations && (getCombinedNodeFlags(loopHeaderDeclarations) & NodeFlags.BlockScoped)) {
+                if (loopInitializer && (getCombinedNodeFlags(loopInitializer) & NodeFlags.BlockScoped)) {
+                    // if loop initializer contains block scoped variables - they should be passed to lifted loop body as parameters
                     loopParameters = [];
-                    for (const varDeclaration of loopHeaderDeclarations.declarations) {
+                    for (const varDeclaration of loopInitializer.declarations) {
                         collectNames(varDeclaration.name);
                     }
                 }
@@ -3123,16 +3157,22 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, Promi
                     increaseIndent();
                 }
 
-                const previousLiftedLoopState = liftedLoopState;
+                const enclosingLiftedLoopState = liftedLoopState;
                 liftedLoopState = {};
                 
-                if (previousLiftedLoopState) {
-                    if (previousLiftedLoopState.argumentsName) {
-                        liftedLoopState.argumentsName = previousLiftedLoopState.argumentsName;
+                if (enclosingLiftedLoopState) {
+                    // enclosingLiftedLoopState !== undefined means that this lifted loop is nested in another lifted loop
+                    // if enclosing lifted loop has already accumulated some state - pass it through
+                    if (enclosingLiftedLoopState.argumentsName) {
+                        // enclosing loop has already used 'arguments' so we've already have some name to alias it
+                        // use the same name in all nested loops
+                        liftedLoopState.argumentsName = enclosingLiftedLoopState.argumentsName;
                     }
 
-                    if (previousLiftedLoopState.hoistedLocalVariables) {
-                        liftedLoopState.hoistedLocalVariables = previousLiftedLoopState.hoistedLocalVariables;
+                    if (enclosingLiftedLoopState.hoistedLocalVariables) {
+                        // we've already collected some non-block scoped variable declarations in enclosing loop
+                        // use the same storage in nested loop
+                        liftedLoopState.hoistedLocalVariables = enclosingLiftedLoopState.hoistedLocalVariables;
                     }
                 }
 
@@ -3147,22 +3187,28 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, Promi
                 writeLine();
 
                 if (liftedLoopState.argumentsName) {
-                    if (previousLiftedLoopState) {
-                        previousLiftedLoopState.argumentsName = liftedLoopState.argumentsName;
+                    // if alias for arguments is set
+                    if (enclosingLiftedLoopState) {
+                        // pass it to enclosing lifted loop
+                        enclosingLiftedLoopState.argumentsName = liftedLoopState.argumentsName;
                     }
                     else {
+                        // this is top level lifted loop
+                        // create an alias for 'arguments' object
                         write(`var ${liftedLoopState.argumentsName} = arguments;`);
                         writeLine();
                     }
                 }
 
                 if (liftedLoopState.hoistedLocalVariables) {
-                    if (previousLiftedLoopState) {
-                        previousLiftedLoopState.hoistedLocalVariables = liftedLoopState.hoistedLocalVariables;
+                    // if hoistedLocalVariables !== undefined this means that we've possibly collected some variable declarations to be hoisted later
+                    if (enclosingLiftedLoopState) {
+                        // pass them to enclosing lifted loop
+                        enclosingLiftedLoopState.hoistedLocalVariables = liftedLoopState.hoistedLocalVariables;
                     }
                     else {
+                        // deduplicate and hoist collected variable declarations
                         write("var ");
-                        // deduplicate variables
                         let seen: Map<string>;
                         for (const id of liftedLoopState.hoistedLocalVariables) {
                            if (!seen) {
@@ -3182,7 +3228,7 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, Promi
                 }
 
                 const currentLoopState = liftedLoopState; 
-                liftedLoopState = previousLiftedLoopState;
+                liftedLoopState = enclosingLiftedLoopState;
 
                 return { functionName, paramList, state: currentLoopState };
 
@@ -3202,6 +3248,8 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, Promi
             function emitNonLiftedLoopBody(node: IterationStatement, emitAsEmbeddedStatement: boolean): void {
                 let saveInNestedNonLiftedLoop: boolean;
                 if (liftedLoopState) {
+                    // we get here if we are trying to emit non-lifted loop inside lifted loop
+                    // set inNestedNonLiftedLoop flag to control emit for non-labeled break\continue
                     saveInNestedNonLiftedLoop = liftedLoopState.inNestedNonLiftedLoop;
                     liftedLoopState.inNestedNonLiftedLoop = true;
                 }
@@ -3229,6 +3277,8 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, Promi
                     increaseIndent();
                 }
                 
+                // loop is considered simple if it does not have any return statements or break\continue that transfer control outside of the loop
+                // simple loops are emitted as just 'loop()';
                 const isSimpleLoop = 
                     !loop.state.hasReturn &&
                     !loop.state.hasNonLabeledBreak &&
@@ -3244,6 +3294,11 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, Promi
                 write(`${loop.functionName}(${loop.paramList});`);
                 
                 if (!isSimpleLoop) {
+                    // for non simple loops we need to store result returned from lifted loop function and use it to do dispatching
+                    // lifted loop function can return:
+                    // - object - used when body of the lifted loop contains return statement. Property "value" of this object stores retuned value
+                    // - string - used to dispatch jumps. "break" and "continue" are used to non-labeled jumps, other values are used to transfer control to
+                    //   different labels
                     writeLine();
                     if (loop.state.hasReturn) {
                         write(`if (typeof ${loopResult} === "object") `);
@@ -3270,7 +3325,7 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, Promi
                         writeLine();
                     }
 
-                    // in case of labeled breaks emit code that either breaks to some known label inside enclosing loop or delegates jump to enclosing loop
+                    // in case of labeled breaks emit code that either breaks to some known label inside enclosing loop or delegates jump decision to enclosing loop
                     emitDispatchTableForLabeledJumps(loopResult, loop.state, liftedLoopState); 
                 }
 
@@ -3323,8 +3378,10 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, Promi
             }
 
             function emitForStatement(node: ForStatement) {
-                const loop = tryLiftLoopBodyToFunction(node);
-                
+                emitLoop(node, emitForStatementWorker);
+            }
+
+            function emitForStatementWorker(node: ForStatement, loop: LiftedLoop) {
                 let endPos = emitToken(SyntaxKind.ForKeyword, node.pos);
                 write(" ");
                 endPos = emitToken(SyntaxKind.OpenParenToken, endPos);
@@ -3357,11 +3414,14 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, Promi
 
             function emitForInOrForOfStatement(node: ForInStatement | ForOfStatement) {
                 if (languageVersion < ScriptTarget.ES6 && node.kind === SyntaxKind.ForOfStatement) {
-                    return emitDownLevelForOfStatement(node);
+                    emitLoop(node, emitDownLevelForOfStatementWorker);
                 }
-
-                const loop = tryLiftLoopBodyToFunction(node);
-                
+                else {
+                    emitLoop(node, emitForInOrForOfStatementWorker);
+                }
+            }
+            
+            function emitForInOrForOfStatementWorker(node: ForInStatement | ForOfStatement, loop: LiftedLoop) {
                 let endPos = emitToken(SyntaxKind.ForKeyword, node.pos);
                 write(" ");
                 endPos = emitToken(SyntaxKind.OpenParenToken, endPos);
@@ -3390,10 +3450,14 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, Promi
                 }
                 else {
                     emitNonLiftedLoopBody(node, /* emitAsEmbeddedStatement */ true);
-                }
+                }                
             }
 
             function emitDownLevelForOfStatement(node: ForOfStatement) {
+                emitLoop(node, emitDownLevelForOfStatementWorker);
+            }
+
+            function emitDownLevelForOfStatementWorker(node: ForOfStatement, loop: LiftedLoop) {
                 // The following ES6 code:
                 //
                 //    for (let v of expr) { }
@@ -3415,8 +3479,6 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, Promi
                 // Note also that because an extra statement is needed to assign to the LHS,
                 // for-of bodies are always emitted as blocks.
 
-                const loop = tryLiftLoopBodyToFunction(node);
-                
                 let endPos = emitToken(SyntaxKind.ForKeyword, node.pos);
                 write(" ");
                 endPos = emitToken(SyntaxKind.OpenParenToken, endPos);
@@ -3540,6 +3602,9 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, Promi
 
             function emitBreakOrContinueStatement(node: BreakOrContinueStatement) {
                 if (liftedLoopState) {
+                    // check if we can emit break\continue as is
+                    // it is possible if either
+                    //   - jump is
                     const canUseBreakOrContinue =
                         (node.label && liftedLoopState.labels && liftedLoopState.labels[node.label.text]) ||
                         (!node.label && liftedLoopState.inNestedNonLiftedLoop);
