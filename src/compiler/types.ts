@@ -1601,7 +1601,6 @@ namespace ts {
         getReferencedValueDeclaration(reference: Identifier): Declaration;
         getTypeReferenceSerializationKind(typeName: EntityName): TypeReferenceSerializationKind;
         isOptionalParameter(node: ParameterDeclaration): boolean;
-        getCapturedBlockScopedNames(node: IterationStatement): CapturedBlockScopedName[];
         isArgumentsLocalBinding(node: Identifier): boolean;
     }
 
@@ -1746,20 +1745,10 @@ namespace ts {
 
         // Values for enum members have been computed, and any errors have been reported for them.
         EnumValuesComputed          = 0x00002000,
-        LoopWithBlockScopedBinding    = 0x00004000,
-        LexicalModuleMergesWithClass = 0x00008000,  // Instantiated lexical module declaration is merged with a previous class declaration. 
+        BlockScopedBindingInLoop    = 0x00004000,
+        LexicalModuleMergesWithClass = 0x00008000,  // Instantiated lexical module declaration is merged with a previous class declaration.
+        LoopWithBlockScopedBindingCapturedInFunction = 0x00010000,
     }
-
-    export interface CapturedBlockScopedName {
-        declaration: Declaration;
-        name: Identifier;
-    }
-    
-    /* @internal */
-    export interface CapturedBlockScopedNames {
-        uniqueNames: Map<string>;
-        list: CapturedBlockScopedName[];
-    } 
 
     /* @internal */
     export interface NodeLinks {
@@ -1778,7 +1767,6 @@ namespace ts {
         importOnRightSide?: Symbol;       // for import declarations - import that appear on the right side
         jsxFlags?: JsxFlags;              // flags for knowning what kind of element/attributes we're dealing with
         resolvedJsxType?: Type;           // resolved element attributes type of a JSX openinglike element
-        capturedBlockScopedNames?: CapturedBlockScopedNames; // Collectio of block scoped names + declarations that are defined inside loop and captured in closures 
     }
 
     export const enum TypeFlags {

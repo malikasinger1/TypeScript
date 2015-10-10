@@ -422,7 +422,7 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, Promi
                 }
                 else {
                     for (const element of (<BindingPattern>node).elements) {
-                        visit(element.propertyName || element.name);
+                        visit(element.name);
                     }
                 }
             }
@@ -3077,30 +3077,45 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, Promi
 
             interface LiftedLoop {
                 functionName: string;
-                parameters: string[];
+                paramList: string;
                 state: LiftedLoopState;
             }
 
-            function tryLiftLoopBodyToFunction(iterationStatement: IterationStatement): LiftedLoop {
-                const capturedVariables = resolver.getCapturedBlockScopedNames(iterationStatement);
-                if (languageVersion >= ScriptTarget.ES6 || !capturedVariables) {
+            function tryLiftLoopBodyToFunction(node: IterationStatement): LiftedLoop {
+                const shouldLiftLoopBody = 
+                    languageVersion < ScriptTarget.ES6 && 
+                    resolver.getNodeCheckFlags(node) & NodeCheckFlags.LoopWithBlockScopedBindingCapturedInFunction;
+
+                if (!shouldLiftLoopBody) {
                     return undefined;
                 }
 
                 const functionName = makeUniqueName("_loop");
-                const parameters: string[] = [];
-                for (const v of capturedVariables) {
-                    // if variable is defined in loop header it should be passed to loop function as parameter
-                    if (v.declaration.parent.kind === SyntaxKind.VariableDeclarationList && v.declaration.parent.parent === iterationStatement) {
-                        const nestedRedeclaration = resolver.getReferencedNestedRedeclaration(v.name);
-                        const nameText = nestedRedeclaration ? getGeneratedNameForNode(nestedRedeclaration.name) : v.name.text;
-                        parameters.push(nameText);
+
+                let loopHeaderDeclarations: VariableDeclarationList;
+                switch (node.kind) {
+                    case SyntaxKind.ForStatement:
+                    case SyntaxKind.ForInStatement:
+                    case SyntaxKind.ForOfStatement:
+                        if ((<ForStatement | ForInStatement | ForOfStatement>node).initializer.kind === SyntaxKind.VariableDeclarationList) {
+                            loopHeaderDeclarations = <VariableDeclarationList>(<ForStatement | ForInStatement | ForOfStatement>node).initializer;
+                        }
+                        break;
+                }
+
+                let loopParameters: string[];
+                if (loopHeaderDeclarations && (getCombinedNodeFlags(loopHeaderDeclarations) & NodeFlags.BlockScoped)) {
+                    loopParameters = [];
+                    for (const varDeclaration of loopHeaderDeclarations.declarations) {
+                        collectNames(varDeclaration.name);
                     }
                 }
 
+                const bodyIsBlock = node.statement.kind === SyntaxKind.Block;
+                const paramList = loopParameters ? loopParameters.join(", ") : "";
+
                 writeLine();
-                const bodyIsBlock = iterationStatement.statement.kind === SyntaxKind.Block;
-                write(`var ${functionName} = function(${parameters.join(", ")})`);
+                write(`var ${functionName} = function(${paramList})`);
 
                 if (!bodyIsBlock) {
                     write(" {");
@@ -3121,7 +3136,7 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, Promi
                     }
                 }
 
-                emitEmbeddedStatement(iterationStatement.statement);
+                emitEmbeddedStatement(node.statement);
 
                 if (!bodyIsBlock) {
                     decreaseIndent();
@@ -3169,7 +3184,19 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, Promi
                 const currentLoopState = liftedLoopState; 
                 liftedLoopState = previousLiftedLoopState;
 
-                return { functionName, parameters, state: currentLoopState };
+                return { functionName, paramList, state: currentLoopState };
+
+                function collectNames(name: Identifier | BindingPattern): void {
+                    if (name.kind === SyntaxKind.Identifier) {
+                        const nameText = isNameOfNestedRedeclaration(<Identifier>name) ? getGeneratedNameForNode(name) : (<Identifier>name).text;
+                        loopParameters.push(nameText);
+                    }
+                    else {
+                        for (const element of (<BindingPattern>name).elements) {
+                            collectNames(element.name);
+                        }
+                    }
+                }
             }
 
             function emitNonLiftedLoopBody(node: IterationStatement, emitAsEmbeddedStatement: boolean): void {
@@ -3197,7 +3224,7 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, Promi
 
             function emitLiftedLoopCall(loop: LiftedLoop, emitAsBlock: boolean): void {
                 if (emitAsBlock) {
-                    write("{");
+                    write(" {");
                     writeLine();
                     increaseIndent();
                 }
@@ -3209,12 +3236,12 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, Promi
                     !loop.state.labeledNonLocalBreaks && 
                     !loop.state.labeledNonLocalContinues;
                      
-                const loopResult = makeUniqueName("step");
+                const loopResult = makeUniqueName("state");
                 if (!isSimpleLoop) {
                     write(`var ${loopResult} = `);
                 }
                 
-                write(`${loop.functionName}(${loop.parameters.join(", ")});`);
+                write(`${loop.functionName}(${loop.paramList});`);
                 
                 if (!isSimpleLoop) {
                     writeLine();
@@ -4085,7 +4112,7 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, Promi
                         // this is necessary to preserve ES6 semantic in scenarios like
                         // for (...) { let x; console.log(x); x = 1 } // assignment on one iteration should not affect other iterations
                         let isLetDefinedInLoop =
-                            (resolver.getNodeCheckFlags(node) & NodeCheckFlags.LoopWithBlockScopedBinding) &&
+                            (resolver.getNodeCheckFlags(node) & NodeCheckFlags.BlockScopedBindingInLoop) &&
                             (getCombinedFlagsForIdentifier(<Identifier>node.name) & NodeFlags.Let);
 
                         // NOTE: default initialization should not be added to let bindings in for-in\for-of statements

@@ -6550,32 +6550,10 @@ namespace ts {
             while (current && !nodeStartsNewLexicalEnvironment(current)) {
                 if (isIterationStatement(current, /*lookInLabeledStatements*/ false)) {
                     if (inFunction) {
-                        const nodeLinks = getNodeLinks(current);
-                        if (!nodeLinks.capturedBlockScopedNames) {
-                            nodeLinks.capturedBlockScopedNames = { uniqueNames: {}, list: [] };
-                        }
-                        // every pair 'name on use-site' + 'id of declaration' should be unique
-                        // we want deduplicate cases when the same name is used in closure multiple times
-                        // at the same time having just name is not enough:
-                        // for (let x;;) {
-                        //     () => x;
-                        //     { 
-                        //          let x;
-                        //          () => x;
-                        //     } 
-                        // }
-                        // here the same name x might originate from different declarations
-                        const name = node.text + "|" + getSymbolId(symbol);
-                        if (!hasProperty(nodeLinks.capturedBlockScopedNames.uniqueNames, name)) {
-                            nodeLinks.capturedBlockScopedNames.uniqueNames[name] = name;
-                            nodeLinks.capturedBlockScopedNames.list.push({
-                                name: node,
-                                declaration: symbol.valueDeclaration
-                            });
-                        }
+                        getNodeLinks(current).flags |= NodeCheckFlags.LoopWithBlockScopedBindingCapturedInFunction;
                     }
                     // mark value declaration so during emit they can have a special handling
-                    getNodeLinks(<VariableDeclaration>symbol.valueDeclaration).flags |= NodeCheckFlags.LoopWithBlockScopedBinding;
+                    getNodeLinks(<VariableDeclaration>symbol.valueDeclaration).flags |= NodeCheckFlags.BlockScopedBindingInLoop;
                     break;
                 }
                 current = current.parent;
@@ -14524,11 +14502,6 @@ namespace ts {
 
         // Emitter support
 
-        function getCapturedBlockScopedNames(node: IterationStatement): CapturedBlockScopedName[] {
-            const nodeLinks = getNodeLinks(node);
-            return nodeLinks.capturedBlockScopedNames && nodeLinks.capturedBlockScopedNames.list;
-        }
-
         function isArgumentsLocalBinding(node: Identifier): boolean {
             return getReferencedValueSymbol(node) === argumentsSymbol;
         }
@@ -14838,7 +14811,6 @@ namespace ts {
                 getReferencedValueDeclaration,
                 getTypeReferenceSerializationKind,
                 isOptionalParameter,
-                getCapturedBlockScopedNames,
                 isArgumentsLocalBinding
             };
         }
