@@ -36,7 +36,7 @@ function foo2(x) {
         var v = x;
         (function() { return x + v });
         (() => x + v);
-    };
+    }
     
     use(v);
 }
@@ -80,7 +80,7 @@ function foo6(x) {
         var v = x;
         (function() { return x + y + v });
         (() => x + y + v);
-    };
+    }
     
     use(v)
 }
@@ -144,7 +144,7 @@ function foo2_c(x) {
         var v = x;
         (function() { return x + v });
         (() => x + v);
-    };
+    }
     
     use(v);
 }
@@ -188,7 +188,7 @@ function foo6_c(x) {
         var v = x;
         (function() { return x + y + v });
         (() => x + y + v);
-    };
+    }
     
     use(v)
 }

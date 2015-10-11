@@ -51,7 +51,7 @@ function foo2(x) {
         if (x == 1) {
             return;
         }
-    };
+    }
     
     use(v);
 }
@@ -65,7 +65,7 @@ function foo3(x) {
         if (x == 1) {
             return;
         }
-    } while (1 === 1);
+    } while (1 === 1)
     
     use(v);
 }
@@ -190,7 +190,7 @@ function foo2_c(x) {
         if (x == 1) {
             return;
         }
-    };
+    }
     
     use(v);
 }
@@ -204,7 +204,7 @@ function foo3_c(x) {
         if (x == 1) {
             return;
         }
-    } while (1 === 1);
+    } while (1 === 1)
     
     use(v);
 }
@@ -246,7 +246,7 @@ function foo6_c(x) {
         if (x == 1) {
             return;
         }
-    };
+    }
     
     use(v)
 }
@@ -260,7 +260,7 @@ function foo7_c(x) {
         if (x == 1) {
             return;
         }
-    } while (1 === 1);
+    } while (1 === 1)
     
     use(v);
 }

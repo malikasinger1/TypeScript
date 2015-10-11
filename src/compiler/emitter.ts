@@ -379,22 +379,60 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, Promi
             return true;
         }
 
-        interface LiftedLoopState {
+        const enum Jump {
+            Break       = 1 << 1,
+            Continue    = 1 << 2,
+            Return      = 1 << 3
+        }
+
+        interface ConvertedLoopState {
+            // set of labels that occured inside the converted loop
+            // used to determine if labeled jump can be emitted as is or it should be dispatched to calling code
             labels?: Map<string>;
+            // collection of labeled jumps that transfer control outside the converted loop.
+            // maps store association 'label -> labelMarker' where
+            // - label - value of label as it apprear in code
+            // - label marker - return value that should be interpreted by calling code as 'jump to <label>' 
             labeledNonLocalBreaks?: Map<string>;
             labeledNonLocalContinues?: Map<string>;
-            
-            hasReturn?: boolean;
-            hasNonLabeledBreak?: boolean;
-            hasNonLabeledContinue?: boolean;
 
-            inNestedNonLiftedLoop?: boolean;
+            // set of non-labeled jumps that transfer control outside the converted loop
+            // used to emit dispatching logic in the caller of converted loop
+            nonLocalJumps?: Jump;
 
+            // set of non-labeled jumps that should be interpreted as local
+            // i.e. if converted loop contains normal loop or switch statement then inside this loop break should be treated as local jump
+            allowedNonLabeledJumps?: Jump;
+
+            // alias for 'arguments' object from the calling code stack frame
+            // i.e.
+            // for (let x;;) <statement that captures x in closure and uses 'arguments'>
+            // should be converted to
+            // var loop = function(x) { <code where 'arguments' is replaced witg 'arguments_1'> }
+            // var arguments_1 = arguments
+            // for (var x;;) loop(x);
+            // otherwise semantics of the code will be different since 'arguments' inside converted loop body 
+            // will refer to function that holds converted loop.
+            // This value is set on demand.
             argumentsName?: string;
+
+            // list of non-block scoped variable declarations that appear inside converted loop
+            // such variable declarations should be moved outside the loop body 
+            // for (let x;;) {
+            //     var y = 1;
+            //     ... 
+            // }
+            // should be converted to
+            // var loop = function(x) {
+            //    y = 1;
+            //    ...
+            // }
+            // var y;
+            // for (var x;;) loop(x);
             hoistedLocalVariables?: Identifier[];
         }
 
-        function setLabeledJump(state: LiftedLoopState, isBreak: boolean, labelText: string, labelMarker: string): void {
+        function setLabeledJump(state: ConvertedLoopState, isBreak: boolean, labelText: string, labelMarker: string): void {
             if (isBreak) {
                 if (!state.labeledNonLocalBreaks) {
                     state.labeledNonLocalBreaks = {};
@@ -409,13 +447,13 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, Promi
             }
         }
 
-        function hoistVariableDeclarationFromLoop(state: LiftedLoopState, declaration: VariableDeclaration): void {
+        function hoistVariableDeclarationFromLoop(state: ConvertedLoopState, declaration: VariableDeclaration): void {
             if (!state.hoistedLocalVariables) {
                 state.hoistedLocalVariables = [];
             }
 
-            visit(declaration.name)
-            
+            visit(declaration.name);
+
             function visit(node: Identifier | BindingPattern) {
                 if (node.kind === SyntaxKind.Identifier) {
                     state.hoistedLocalVariables.push((<Identifier>node));
@@ -445,7 +483,7 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, Promi
             let nodeToGeneratedName: string[] = [];
             let computedPropertyNamesToGeneratedNames: string[];
 
-            let liftedLoopState: LiftedLoopState;
+            let convertedLoopState: ConvertedLoopState;
 
             let extendsEmitted = false;
             let decorateEmitted = false;
@@ -1874,15 +1912,15 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, Promi
             }
 
             function emitIdentifier(node: Identifier) {
-                if (liftedLoopState) {
+                if (convertedLoopState) {
                     if (node.text == "arguments" && resolver.isArgumentsLocalBinding(node)) {
-                        // in lifted loop body arguments cannot be used directly.
-                        let name = liftedLoopState.argumentsName || (liftedLoopState.argumentsName = makeUniqueName("arguments"));
+                        // in converted loop body arguments cannot be used directly.
+                        let name = convertedLoopState.argumentsName || (convertedLoopState.argumentsName = makeUniqueName("arguments"));
                         write(name);
                         return;
                     }
                 }
-                
+
                 if (!node.parent) {
                     write(node.text);
                 }
@@ -2969,16 +3007,16 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, Promi
             }
 
             function emitDoStatement(node: DoStatement) {
-                emitLoop(node, emitDoStatementWorker)
+                emitLoop(node, emitDoStatementWorker);
             }
-            
-            function emitDoStatementWorker(node: DoStatement, loop: LiftedLoop) {
+
+            function emitDoStatementWorker(node: DoStatement, loop: ConvertedLoop) {
                 write("do");
                 if (loop) {
-                    emitLiftedLoopCall(loop, /* emitAsBlock */ true);
+                    emitConvertedLoopCall(loop, /* emitAsBlock */ true);
                 }
                 else {
-                    emitNonLiftedLoopBody(node, /* emitAsEmbeddedStatement */ true);
+                    emitNormalLoopBody(node, /* emitAsEmbeddedStatement */ true);
                 }
                 if (node.statement.kind === SyntaxKind.Block) {
                     write(" ");
@@ -2995,17 +3033,16 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, Promi
                 emitLoop(node, emitWhileStatementWorker);
             }
 
-            function emitWhileStatementWorker(node: WhileStatement, loop: LiftedLoop) {
-                
+            function emitWhileStatementWorker(node: WhileStatement, loop: ConvertedLoop) {
                 write("while (");
                 emit(node.expression);
                 write(")");
 
                 if (loop) {
-                    emitLiftedLoopCall(loop, /* emitAsBlock */ true);
+                    emitConvertedLoopCall(loop, /* emitAsBlock */ true);
                 }
                 else {
-                    emitNonLiftedLoopBody(node, /* emitAsEmbeddedStatement */ true);
+                    emitNormalLoopBody(node, /* emitAsEmbeddedStatement */ true);
                 }
             }
 
@@ -3020,11 +3057,11 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, Promi
                     return false;
                 }
 
-                if (liftedLoopState && (getCombinedNodeFlags(decl) & NodeFlags.BlockScoped) === 0) {
-                    // we are inside a lifted loop - this can only happen in downlevel scenarios 
+                if (convertedLoopState && (getCombinedNodeFlags(decl) & NodeFlags.BlockScoped) === 0) {
+                    // we are inside a converted loop - this can only happen in downlevel scenarios 
                     // record names for all variable declarations
                     for (const varDecl of decl.declarations) {
-                        hoistVariableDeclarationFromLoop(liftedLoopState, varDecl)
+                        hoistVariableDeclarationFromLoop(convertedLoopState, varDecl);
                     }
                     return false;
                 }
@@ -3080,26 +3117,26 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, Promi
                 return started;
             }
 
-            interface LiftedLoop {
+            interface ConvertedLoop {
                 functionName: string;
                 paramList: string;
-                state: LiftedLoopState;
+                state: ConvertedLoopState;
             }
 
-            function shouldLiftLoopBody(node: IterationStatement): boolean {
+            function shouldConvertLoopBody(node: IterationStatement): boolean {
                 return languageVersion < ScriptTarget.ES6 &&
                     (resolver.getNodeCheckFlags(node) & NodeCheckFlags.LoopWithBlockScopedBindingCapturedInFunction) !== 0;
             }
 
-            function emitLoop(node: IterationStatement, loopEmitter: (n: IterationStatement, liftedLoop: LiftedLoop) => void): void {
-                const shouldLift = shouldLiftLoopBody(node);
-                if (!shouldLift) {
-                    loopEmitter(node, /* liftedLoopBody */ undefined);
+            function emitLoop(node: IterationStatement, loopEmitter: (n: IterationStatement, convertedLoop: ConvertedLoop) => void): void {
+                const shouldConvert = shouldConvertLoopBody(node);
+                if (!shouldConvert) {
+                    loopEmitter(node, /* convertedLoop*/ undefined);
                 }
                 else {
-                    // lifted loop body will introduce new variable statement.
+                    // converted loop body will introduce new variable statement.
                     // if previously loop was parented by labeled statement then with naive emit label will be moved to this new synthesized variable statement.
-                    // to preserve correct behavior we need to wrap lifted loop body and loop into block
+                    // to preserve correct behavior we need to wrap converted loop body and loop into block
                     // l0: for (let x of []) { <body> }
                     // will become
                     // l0 {
@@ -3112,7 +3149,7 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, Promi
                         increaseIndent();
                         writeLine();
                     }
-                    const loop = liftLoopBodyToFunction(node);
+                    const loop = convertLoopBody(node);
                     loopEmitter(node, loop);
                     if (parentIsLabeledStatement) {
                         decreaseIndent();
@@ -3121,8 +3158,8 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, Promi
                     }
                 }
             }
-            
-            function liftLoopBodyToFunction(node: IterationStatement): LiftedLoop {
+
+            function convertLoopBody(node: IterationStatement): ConvertedLoop {
                 const functionName = makeUniqueName("_loop");
 
                 let loopInitializer: VariableDeclarationList;
@@ -3138,7 +3175,7 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, Promi
 
                 let loopParameters: string[];
                 if (loopInitializer && (getCombinedNodeFlags(loopInitializer) & NodeFlags.BlockScoped)) {
-                    // if loop initializer contains block scoped variables - they should be passed to lifted loop body as parameters
+                    // if loop initializer contains block scoped variables - they should be passed to converted loop body as parameters
                     loopParameters = [];
                     for (const varDeclaration of loopInitializer.declarations) {
                         collectNames(varDeclaration.name);
@@ -3157,22 +3194,22 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, Promi
                     increaseIndent();
                 }
 
-                const enclosingLiftedLoopState = liftedLoopState;
-                liftedLoopState = {};
-                
-                if (enclosingLiftedLoopState) {
-                    // enclosingLiftedLoopState !== undefined means that this lifted loop is nested in another lifted loop
-                    // if enclosing lifted loop has already accumulated some state - pass it through
-                    if (enclosingLiftedLoopState.argumentsName) {
-                        // enclosing loop has already used 'arguments' so we've already have some name to alias it
+                const convertedOuterLoopState = convertedLoopState;
+                convertedLoopState = {};
+
+                if (convertedOuterLoopState) {
+                    // convertedOuterLoopState !== undefined means that this converted loop is nested in another converted loop
+                    // if outer converted loop has already accumulated some state - pass it through
+                    if (convertedOuterLoopState.argumentsName) {
+                        // outer loop has already used 'arguments' so we've already have some name to alias it
                         // use the same name in all nested loops
-                        liftedLoopState.argumentsName = enclosingLiftedLoopState.argumentsName;
+                        convertedLoopState.argumentsName = convertedOuterLoopState.argumentsName;
                     }
 
-                    if (enclosingLiftedLoopState.hoistedLocalVariables) {
+                    if (convertedOuterLoopState.hoistedLocalVariables) {
                         // we've already collected some non-block scoped variable declarations in enclosing loop
                         // use the same storage in nested loop
-                        liftedLoopState.hoistedLocalVariables = enclosingLiftedLoopState.hoistedLocalVariables;
+                        convertedLoopState.hoistedLocalVariables = convertedOuterLoopState.hoistedLocalVariables;
                     }
                 }
 
@@ -3186,31 +3223,31 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, Promi
                 write(";");
                 writeLine();
 
-                if (liftedLoopState.argumentsName) {
+                if (convertedLoopState.argumentsName) {
                     // if alias for arguments is set
-                    if (enclosingLiftedLoopState) {
-                        // pass it to enclosing lifted loop
-                        enclosingLiftedLoopState.argumentsName = liftedLoopState.argumentsName;
+                    if (convertedOuterLoopState) {
+                        // pass it to outer converted loop
+                        convertedOuterLoopState.argumentsName = convertedLoopState.argumentsName;
                     }
                     else {
-                        // this is top level lifted loop
+                        // this is top level converted loop and 
                         // create an alias for 'arguments' object
-                        write(`var ${liftedLoopState.argumentsName} = arguments;`);
+                        write(`var ${convertedLoopState.argumentsName} = arguments;`);
                         writeLine();
                     }
                 }
 
-                if (liftedLoopState.hoistedLocalVariables) {
+                if (convertedLoopState.hoistedLocalVariables) {
                     // if hoistedLocalVariables !== undefined this means that we've possibly collected some variable declarations to be hoisted later
-                    if (enclosingLiftedLoopState) {
-                        // pass them to enclosing lifted loop
-                        enclosingLiftedLoopState.hoistedLocalVariables = liftedLoopState.hoistedLocalVariables;
+                    if (convertedOuterLoopState) {
+                        // pass them to outer converted loop
+                        convertedOuterLoopState.hoistedLocalVariables = convertedLoopState.hoistedLocalVariables;
                     }
                     else {
                         // deduplicate and hoist collected variable declarations
                         write("var ");
                         let seen: Map<string>;
-                        for (const id of liftedLoopState.hoistedLocalVariables) {
+                        for (const id of convertedLoopState.hoistedLocalVariables) {
                            if (!seen) {
                                seen = {};
                            }
@@ -3227,8 +3264,8 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, Promi
                     }
                 }
 
-                const currentLoopState = liftedLoopState; 
-                liftedLoopState = enclosingLiftedLoopState;
+                const currentLoopState = convertedLoopState;
+                convertedLoopState = convertedOuterLoopState;
 
                 return { functionName, paramList, state: currentLoopState };
 
@@ -3245,18 +3282,18 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, Promi
                 }
             }
 
-            function emitNonLiftedLoopBody(node: IterationStatement, emitAsEmbeddedStatement: boolean): void {
-                let saveInNestedNonLiftedLoop: boolean;
-                if (liftedLoopState) {
-                    // we get here if we are trying to emit non-lifted loop inside lifted loop
-                    // set inNestedNonLiftedLoop flag to control emit for non-labeled break\continue
-                    saveInNestedNonLiftedLoop = liftedLoopState.inNestedNonLiftedLoop;
-                    liftedLoopState.inNestedNonLiftedLoop = true;
+            function emitNormalLoopBody(node: IterationStatement, emitAsEmbeddedStatement: boolean): void {
+                let saveAllowedNonLabeledJumps: Jump;
+                if (convertedLoopState) {
+                    // we get here if we are trying to emit normal loop loop inside converted loop
+                    // set allowedNonLabeledJumps to Break | Continue to mark that break\continue inside the loop should be emitted as is
+                    saveAllowedNonLabeledJumps = convertedLoopState.allowedNonLabeledJumps;
+                    convertedLoopState.allowedNonLabeledJumps = Jump.Break | Jump.Continue;
                 }
-                
+
                 if (emitAsEmbeddedStatement) {
                     emitEmbeddedStatement(node.statement);
-                } 
+                }
                 else if (node.statement.kind === SyntaxKind.Block) {
                     emitLines((<Block>node.statement).statements);
                 }
@@ -3265,68 +3302,66 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, Promi
                     emit(node.statement);
                 }
 
-                if (liftedLoopState) {
-                    liftedLoopState.inNestedNonLiftedLoop = saveInNestedNonLiftedLoop;
+                if (convertedLoopState) {
+                    convertedLoopState.allowedNonLabeledJumps = saveAllowedNonLabeledJumps;
                 }
             }
 
-            function emitLiftedLoopCall(loop: LiftedLoop, emitAsBlock: boolean): void {
+            function emitConvertedLoopCall(loop: ConvertedLoop, emitAsBlock: boolean): void {
                 if (emitAsBlock) {
                     write(" {");
                     writeLine();
                     increaseIndent();
                 }
-                
+
                 // loop is considered simple if it does not have any return statements or break\continue that transfer control outside of the loop
                 // simple loops are emitted as just 'loop()';
-                const isSimpleLoop = 
-                    !loop.state.hasReturn &&
-                    !loop.state.hasNonLabeledBreak &&
-                    !loop.state.hasNonLabeledContinue &&
-                    !loop.state.labeledNonLocalBreaks && 
+                const isSimpleLoop =
+                    !loop.state.nonLocalJumps &&
+                    !loop.state.labeledNonLocalBreaks &&
                     !loop.state.labeledNonLocalContinues;
-                     
+
                 const loopResult = makeUniqueName("state");
                 if (!isSimpleLoop) {
                     write(`var ${loopResult} = `);
                 }
-                
+
                 write(`${loop.functionName}(${loop.paramList});`);
-                
+
                 if (!isSimpleLoop) {
-                    // for non simple loops we need to store result returned from lifted loop function and use it to do dispatching
-                    // lifted loop function can return:
-                    // - object - used when body of the lifted loop contains return statement. Property "value" of this object stores retuned value
+                    // for non simple loops we need to store result returned from converted loop function and use it to do dispatching
+                    // converted loop function can return:
+                    // - object - used when body of the converted loop contains return statement. Property "value" of this object stores retuned value
                     // - string - used to dispatch jumps. "break" and "continue" are used to non-labeled jumps, other values are used to transfer control to
                     //   different labels
                     writeLine();
-                    if (loop.state.hasReturn) {
+                    if (loop.state.nonLocalJumps & Jump.Return) {
                         write(`if (typeof ${loopResult} === "object") `);
-                        if (liftedLoopState) {
-                            // we are currently nested in another lifted loop - return unwrapped result
-                            write(`return ${loopResult};`)
+                        if (convertedLoopState) {
+                            // we are currently nested in another converted loop - return unwrapped result
+                            write(`return ${loopResult};`);
                             // propagate 'hasReturn' flag to outer loop
-                            liftedLoopState.hasReturn = true;
+                            convertedLoopState.nonLocalJumps |= Jump.Return;
                         }
                         else {
-                            // top level lifted loop - return unwrapped value
+                            // top level converted loop - return unwrapped value
                             write(`return ${loopResult}.value`);
                         }
                         writeLine();
                     }
 
-                    if (loop.state.hasNonLabeledBreak) {
+                    if (loop.state.nonLocalJumps & Jump.Break) {
                         write(`if (${loopResult} === "break") break;`);
                         writeLine();
                     }
 
-                    if (loop.state.hasNonLabeledContinue) {
+                    if (loop.state.nonLocalJumps & Jump.Continue) {
                         write(`if (${loopResult} === "continue") continue;`);
                         writeLine();
                     }
 
-                    // in case of labeled breaks emit code that either breaks to some known label inside enclosing loop or delegates jump decision to enclosing loop
-                    emitDispatchTableForLabeledJumps(loopResult, loop.state, liftedLoopState); 
+                    // in case of labeled breaks emit code that either breaks to some known label inside outer loop or delegates jump decision to outer loop
+                    emitDispatchTableForLabeledJumps(loopResult, loop.state, convertedLoopState);
                 }
 
                 if (emitAsBlock) {
@@ -3335,7 +3370,7 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, Promi
                     write("}");
                 }
 
-                function emitDispatchTableForLabeledJumps(loopResultVariable: string, currentLoop: LiftedLoopState, enclosingLoop: LiftedLoopState) {
+                function emitDispatchTableForLabeledJumps(loopResultVariable: string, currentLoop: ConvertedLoopState, outerLoop: ConvertedLoopState) {
                     if (!currentLoop.labeledNonLocalBreaks && !currentLoop.labeledNonLocalContinues) {
                         return;
                     }
@@ -3343,24 +3378,27 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, Promi
                     write(`switch(${loopResultVariable}) {`);
                     increaseIndent();
 
-                    emitDispatchEntriesForLabeledJumps(currentLoop.labeledNonLocalBreaks, /* isBreak */ true, loopResultVariable, enclosingLoop);
-                    emitDispatchEntriesForLabeledJumps(currentLoop.labeledNonLocalContinues, /* isBreak */ false, loopResultVariable, enclosingLoop);
+                    emitDispatchEntriesForLabeledJumps(currentLoop.labeledNonLocalBreaks, /* isBreak */ true, loopResultVariable, outerLoop);
+                    emitDispatchEntriesForLabeledJumps(currentLoop.labeledNonLocalContinues, /* isBreak */ false, loopResultVariable, outerLoop);
 
                     decreaseIndent();
                     writeLine();
                     write("}");
                 }
 
-                function emitDispatchEntriesForLabeledJumps(table: Map<string>, isBreak: boolean, loopResultVariable: string, enclosingLoop: LiftedLoopState): void {
+                function emitDispatchEntriesForLabeledJumps(table: Map<string>, isBreak: boolean, loopResultVariable: string, outerLoop: ConvertedLoopState): void {
                     if (!table) {
                         return;
                     }
-                    
+
                     for (let labelText in table) {
-                        let labelMarker = table[labelText]
+                        let labelMarker = table[labelText];
                         writeLine();
-                        write(`case "${labelMarker}": `)
-                        if (!enclosingLoop || (enclosingLoop.labels && enclosingLoop.labels[labelText])) {
+                        write(`case "${labelMarker}": `);
+                        // if there are no outer converted loop or outer label in question is located inside outer converted loop
+                        // then emit labeled break\continue
+                        // otherwise propagate pair 'label -> marker' to outer converted loop and emit 'return labelMarker' so outer loop can later decide what to do  
+                        if (!outerLoop || (outerLoop.labels && outerLoop.labels[labelText])) {
                             if (isBreak) {
                                 write("break ");
                             }
@@ -3370,7 +3408,7 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, Promi
                             write(`${labelText};`);
                         }
                         else {
-                            setLabeledJump(enclosingLoop, isBreak, labelText, labelMarker);
+                            setLabeledJump(outerLoop, isBreak, labelText, labelMarker);
                             write(`return ${loopResultVariable};`);
                         }
                     }
@@ -3381,7 +3419,7 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, Promi
                 emitLoop(node, emitForStatementWorker);
             }
 
-            function emitForStatementWorker(node: ForStatement, loop: LiftedLoop) {
+            function emitForStatementWorker(node: ForStatement, loop: ConvertedLoop) {
                 let endPos = emitToken(SyntaxKind.ForKeyword, node.pos);
                 write(" ");
                 endPos = emitToken(SyntaxKind.OpenParenToken, endPos);
@@ -3403,12 +3441,12 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, Promi
                 write(";");
                 emitOptional(" ", node.incrementor);
                 write(")");
-                
+
                 if (loop) {
-                    emitLiftedLoopCall(loop, /* emitAsBlock */ true);
+                    emitConvertedLoopCall(loop, /* emitAsBlock */ true);
                 }
                 else {
-                    emitNonLiftedLoopBody(node, /* emitAsEmbeddedStatement */ true);
+                    emitNormalLoopBody(node, /* emitAsEmbeddedStatement */ true);
                 }
             }
 
@@ -3420,8 +3458,8 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, Promi
                     emitLoop(node, emitForInOrForOfStatementWorker);
                 }
             }
-            
-            function emitForInOrForOfStatementWorker(node: ForInStatement | ForOfStatement, loop: LiftedLoop) {
+
+            function emitForInOrForOfStatementWorker(node: ForInStatement | ForOfStatement, loop: ConvertedLoop) {
                 let endPos = emitToken(SyntaxKind.ForKeyword, node.pos);
                 write(" ");
                 endPos = emitToken(SyntaxKind.OpenParenToken, endPos);
@@ -3446,18 +3484,18 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, Promi
                 emitToken(SyntaxKind.CloseParenToken, node.expression.end);
 
                 if (loop) {
-                    emitLiftedLoopCall(loop, /* emitAsBlock */ true);
+                    emitConvertedLoopCall(loop, /* emitAsBlock */ true);
                 }
                 else {
-                    emitNonLiftedLoopBody(node, /* emitAsEmbeddedStatement */ true);
-                }                
+                    emitNormalLoopBody(node, /* emitAsEmbeddedStatement */ true);
+                }
             }
 
             function emitDownLevelForOfStatement(node: ForOfStatement) {
                 emitLoop(node, emitDownLevelForOfStatementWorker);
             }
 
-            function emitDownLevelForOfStatementWorker(node: ForOfStatement, loop: LiftedLoop) {
+            function emitDownLevelForOfStatementWorker(node: ForOfStatement, loop: ConvertedLoop) {
                 // The following ES6 code:
                 //
                 //    for (let v of expr) { }
@@ -3589,34 +3627,36 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, Promi
 
                 if (loop) {
                     writeLine();
-                    emitLiftedLoopCall(loop, /* emitAsBlock */ false);
+                    emitConvertedLoopCall(loop, /* emitAsBlock */ false);
                 }
                 else {
-                    emitNonLiftedLoopBody(node, /* emitAsEmbeddedStatement */ false);
+                    emitNormalLoopBody(node, /* emitAsEmbeddedStatement */ false);
                 }
-                
+
                 writeLine();
                 decreaseIndent();
                 write("}");
             }
 
             function emitBreakOrContinueStatement(node: BreakOrContinueStatement) {
-                if (liftedLoopState) {
+                if (convertedLoopState) {
                     // check if we can emit break\continue as is
                     // it is possible if either
-                    //   - jump is
+                    //   - break\continue is statement labeled and label is located inside the converted loop
+                    //   - break\continue is non-labeled and located in non-converted loop\switch statement
+                    const jump = node.kind === SyntaxKind.BreakStatement ? Jump.Break : Jump.Continue;
                     const canUseBreakOrContinue =
-                        (node.label && liftedLoopState.labels && liftedLoopState.labels[node.label.text]) ||
-                        (!node.label && liftedLoopState.inNestedNonLiftedLoop);
-                    
+                        (node.label && convertedLoopState.labels && convertedLoopState.labels[node.label.text]) ||
+                        (!node.label && (convertedLoopState.allowedNonLabeledJumps & jump));
+
                     if (!canUseBreakOrContinue) {
                         if (!node.label) {
                             if (node.kind === SyntaxKind.BreakStatement) {
-                                liftedLoopState.hasNonLabeledBreak = true;
+                                convertedLoopState.nonLocalJumps |= Jump.Break;
                                 write(`return "break";`);
                             }
                             else {
-                                liftedLoopState.hasNonLabeledContinue = true;
+                                convertedLoopState.nonLocalJumps |= Jump.Continue;
                                 write(`return "continue";`);
                             }
                         }
@@ -3624,15 +3664,15 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, Promi
                             let labelMarker: string;
                             if (node.kind === SyntaxKind.BreakStatement) {
                                 labelMarker = `break-${node.label.text}`;
-                                setLabeledJump(liftedLoopState, /* isBreak */ true, node.label.text, labelMarker);
+                                setLabeledJump(convertedLoopState, /* isBreak */ true, node.label.text, labelMarker);
                             }
                             else {
                                 labelMarker = `continue-${node.label.text}`;
-                                setLabeledJump(liftedLoopState, /* isBreak */ false, node.label.text, labelMarker);
+                                setLabeledJump(convertedLoopState, /* isBreak */ false, node.label.text, labelMarker);
                             }
                             write(`return "${labelMarker}";`);
                         }
-                        
+
                         return;
                     }
                 }
@@ -3643,8 +3683,8 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, Promi
             }
 
             function emitReturnStatement(node: ReturnStatement) {
-                if (liftedLoopState) {
-                    liftedLoopState.hasReturn = true;
+                if (convertedLoopState) {
+                    convertedLoopState.nonLocalJumps |= Jump.Return;
                     write(`return { value: `);
                     if (node.expression) {
                         emit(node.expression);
@@ -3675,7 +3715,17 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, Promi
                 emit(node.expression);
                 endPos = emitToken(SyntaxKind.CloseParenToken, node.expression.end);
                 write(" ");
+
+                let saveAllowedNonLabeledJumps: Jump;
+                if (convertedLoopState) {
+                    saveAllowedNonLabeledJumps = convertedLoopState.allowedNonLabeledJumps;
+                    // for switch statement allow only non-labeled break
+                    convertedLoopState.allowedNonLabeledJumps |= Jump.Break;
+                }
                 emitCaseBlock(node.caseBlock, endPos);
+                if (convertedLoopState) {
+                    convertedLoopState.allowedNonLabeledJumps = saveAllowedNonLabeledJumps;
+                }
             }
 
             function emitCaseBlock(node: CaseBlock, startPos: number): void {
@@ -3757,19 +3807,19 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, Promi
             }
 
             function emitLabelledStatement(node: LabeledStatement) {
-                if (liftedLoopState) {
-                    if (!liftedLoopState.labels) {
-                        liftedLoopState.labels = {};
+                if (convertedLoopState) {
+                    if (!convertedLoopState.labels) {
+                        convertedLoopState.labels = {};
                     }
-                    liftedLoopState.labels[node.label.text] = node.label.text;
+                    convertedLoopState.labels[node.label.text] = node.label.text;
                 }
-                
+
                 emit(node.label);
                 write(": ");
                 emit(node.statement);
-                
-                if (liftedLoopState) {
-                    liftedLoopState.labels[node.label.text] = undefined;
+
+                if (convertedLoopState) {
+                    convertedLoopState.labels[node.label.text] = undefined;
                 }
             }
 
@@ -4664,12 +4714,12 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, Promi
             }
 
             function emitSignatureAndBody(node: FunctionLikeDeclaration) {
-                const saveJumpsInLiftedLoop = liftedLoopState
+                const saveConvertedLoopState = convertedLoopState;
                 let saveTempFlags = tempFlags;
                 let saveTempVariables = tempVariables;
                 let saveTempParameters = tempParameters;
-                
-                liftedLoopState = undefined;
+
+                convertedLoopState = undefined;
                 tempFlags = 0;
                 tempVariables = undefined;
                 tempParameters = undefined;
@@ -4695,8 +4745,8 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, Promi
                     emitExportMemberAssignment(node);
                 }
 
-                Debug.assert(liftedLoopState === undefined);
-                liftedLoopState = saveJumpsInLiftedLoop;
+                Debug.assert(convertedLoopState === undefined);
+                convertedLoopState = saveConvertedLoopState;
 
                 tempFlags = saveTempFlags;
                 tempVariables = saveTempVariables;
@@ -5019,21 +5069,21 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, Promi
             }
 
             function emitConstructor(node: ClassLikeDeclaration, baseTypeElement: ExpressionWithTypeArguments) {
-                const saveJumpsInLiftedLoop = liftedLoopState;
+                const saveConvertedLoopState = convertedLoopState;
                 let saveTempFlags = tempFlags;
                 let saveTempVariables = tempVariables;
                 let saveTempParameters = tempParameters;
-                
-                liftedLoopState = undefined;
+
+                convertedLoopState = undefined;
                 tempFlags = 0;
                 tempVariables = undefined;
                 tempParameters = undefined;
 
                 emitConstructorWorker(node, baseTypeElement);
 
-                Debug.assert(liftedLoopState === undefined);
-                liftedLoopState = saveJumpsInLiftedLoop;
-                
+                Debug.assert(convertedLoopState === undefined);
+                convertedLoopState = saveConvertedLoopState;
+
                 tempFlags = saveTempFlags;
                 tempVariables = saveTempVariables;
                 tempParameters = saveTempParameters;
@@ -5368,9 +5418,9 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, Promi
                 let saveTempVariables = tempVariables;
                 let saveTempParameters = tempParameters;
                 let saveComputedPropertyNamesToGeneratedNames = computedPropertyNamesToGeneratedNames;
-                let savedJumpsInLiftedLoops = liftedLoopState;
-                
-                liftedLoopState = undefined;
+                let saveConvertedLoopState = convertedLoopState;
+
+                convertedLoopState = undefined;
                 tempFlags = 0;
                 tempVariables = undefined;
                 tempParameters = undefined;
@@ -5398,10 +5448,10 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, Promi
                 });
                 write(";");
                 emitTempDeclarations(/*newLine*/ true);
-                
-                Debug.assert(liftedLoopState === undefined);
-                liftedLoopState = savedJumpsInLiftedLoops;
-                
+
+                Debug.assert(convertedLoopState === undefined);
+                convertedLoopState = saveConvertedLoopState;
+
                 tempFlags = saveTempFlags;
                 tempVariables = saveTempVariables;
                 tempParameters = saveTempParameters;
@@ -6087,17 +6137,17 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, Promi
                 emitEnd(node.name);
                 write(") ");
                 if (node.body.kind === SyntaxKind.ModuleBlock) {
-                    const saveJumpsInLiftedLoops = liftedLoopState;
+                    const saveConvertedLoopState = convertedLoopState;
                     let saveTempFlags = tempFlags;
                     let saveTempVariables = tempVariables;
-                    liftedLoopState = undefined;
+                    convertedLoopState = undefined;
                     tempFlags = 0;
                     tempVariables = undefined;
 
                     emit(node.body);
 
-                    Debug.assert(liftedLoopState === undefined);
-                    liftedLoopState = saveJumpsInLiftedLoops;
+                    Debug.assert(convertedLoopState === undefined);
+                    convertedLoopState = saveConvertedLoopState;
 
                     tempFlags = saveTempFlags;
                     tempVariables = saveTempVariables;

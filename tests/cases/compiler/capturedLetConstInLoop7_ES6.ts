@@ -71,7 +71,7 @@ while (1 === 1) {
     if (x == 2) {
         continue l2;
     }
-};
+}
 
 l3:
 do {
@@ -147,7 +147,7 @@ while (1 === 1) {
         continue l6;
     }
 
-};
+}
 
 l7:
 do {
@@ -259,7 +259,7 @@ while (1 === 1) {
     if (x == 2) {
         continue l2_c;
     }
-};
+}
 
 l3_c:
 do {
@@ -335,7 +335,7 @@ while (1 === 1) {
         continue l6_c;
     }
 
-};
+}
 
 l7_c:
 do {

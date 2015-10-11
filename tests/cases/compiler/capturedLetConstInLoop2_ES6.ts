@@ -30,7 +30,7 @@ function foo2(x) {
         let a = arguments.length;
         (function() { return x + a });
         (() => x + a);
-    };
+    }
 }
 
 function foo3(x) {
@@ -66,7 +66,7 @@ function foo6(x) {
         let a = arguments.length;
         (function() { return x + y + a });
         (() => x + y + a);
-    };
+    }
 }
 
 function foo7(x) {
@@ -117,7 +117,7 @@ function foo2_c(x) {
         const a = arguments.length;
         (function() { return x + a });
         (() => x + a);
-    };
+    }
 }
 
 function foo3_c(x) {
@@ -153,7 +153,7 @@ function foo6_c(x) {
         const a = arguments.length;
         (function() { return x + y + a });
         (() => x + y + a);
-    };
+    }
 }
 
 function foo7_c(x) {

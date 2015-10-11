@@ -28,7 +28,7 @@ while (1 === 1) {
     var v2 = x;
     (function() { return x + v2});
     (() => x);
-};
+}
 
 do {
     let x;
@@ -55,7 +55,7 @@ while (1 === 1) {
     var v6 = x;
     (function() { return x + y + v6});
     (() => x + y);
-};
+}
 
 do {
     let x, y;
@@ -99,7 +99,7 @@ while (1 === 1) {
     var v2_c = x;
     (function() { return x + v2_c});
     (() => x);
-};
+}
 
 do {
     const x = 1;
@@ -126,7 +126,7 @@ while (1 === 1) {
     var v6_c = x;
     (function() { return x + y + v6_c});
     (() => x + y);
-};
+}
 
 do {
     const x = 1, y = 1;

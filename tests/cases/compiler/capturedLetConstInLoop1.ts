@@ -18,7 +18,7 @@ while (1 === 1) {
     let x;
     (function() { return x});
     (() => x);
-};
+}
 
 do {
     let x;
@@ -41,7 +41,7 @@ while (1 === 1) {
     let x, y;
     (function() { return x + y});
     (() => x + y);
-};
+}
 
 do {
     let x, y;
@@ -75,7 +75,7 @@ while (1 === 1) {
     const x = 1;
     (function() { return x});
     (() => x);
-};
+}
 
 do {
     const x = 1;
@@ -98,7 +98,7 @@ while (1 === 1) {
     const x = 1, y = 1;
     (function() { return x + y});
     (() => x + y);
-};
+}
 
 do {
     const x = 1, y = 1;
@@ -111,4 +111,3 @@ for (const y = 0; y < 1;) {
     (function() { return x + y});
     (() => x + y);
 }
-
