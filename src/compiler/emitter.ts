@@ -3134,28 +3134,12 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, Promi
                     loopEmitter(node, /* convertedLoop*/ undefined);
                 }
                 else {
-                    // converted loop body will introduce new variable statement.
-                    // if previously loop was parented by labeled statement then with naive emit label will be moved to this new synthesized variable statement.
-                    // to preserve correct behavior we need to wrap converted loop body and loop into block
-                    // l0: for (let x of []) { <body> }
-                    // will become
-                    // l0 {
-                    //    var loop = function(x) { <body> }
-                    //    for (let x of []) loop(x);
-                    // }
-                    const parentIsLabeledStatement = node.parent.kind === SyntaxKind.LabeledStatement;
-                    if (parentIsLabeledStatement) {
-                        write("{");
-                        increaseIndent();
-                        writeLine();
-                    }
                     const loop = convertLoopBody(node);
-                    loopEmitter(node, loop);
-                    if (parentIsLabeledStatement) {
-                        decreaseIndent();
-                        writeLine();
-                        write("}");
+                    if (node.parent.kind === SyntaxKind.LabeledStatement) {
+                        // if parent of the loop was labeled statement - attach the label to loop skipping converted loop body
+                        emitLabelAndColon(<LabeledStatement>node.parent);
                     }
+                    loopEmitter(node, loop);
                 }
             }
 
@@ -3806,7 +3790,16 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, Promi
                 write(";");
             }
 
+            function emitLabelAndColon(node: LabeledStatement): void {
+                emit(node.label);
+                write(": ");
+            }
+
             function emitLabelledStatement(node: LabeledStatement) {
+                if (!isIterationStatement(node.statement, /* lookInLabeledStatements */ false) || !shouldConvertLoopBody(<IterationStatement>node.statement)) {
+                    emitLabelAndColon(node);
+                }
+
                 if (convertedLoopState) {
                     if (!convertedLoopState.labels) {
                         convertedLoopState.labels = {};
@@ -3814,8 +3807,6 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, Promi
                     convertedLoopState.labels[node.label.text] = node.label.text;
                 }
 
-                emit(node.label);
-                write(": ");
                 emit(node.statement);
 
                 if (convertedLoopState) {

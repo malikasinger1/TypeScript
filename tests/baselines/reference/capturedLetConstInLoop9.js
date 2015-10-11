@@ -161,60 +161,58 @@ for (var x = 0; x < 1; ++x) {
     _loop_1(x);
 }
 function foo() {
-    l0: {
-        var _loop_3 = function(a) {
-            if (a === 1) {
-                return "break";
+    var _loop_3 = function(a) {
+        if (a === 1) {
+            return "break";
+        }
+        if (a === 2) {
+            return "break-l0";
+        }
+        for (var _i = 0, _a = []; _i < _a.length; _i++) {
+            var b = _a[_i];
+            _b = [{ x: 1, y: 2 }][0], x = _b.x, z = _b.y;
+            if (b === 1) {
+                break;
             }
-            if (a === 2) {
+            if (b === 2) {
                 return "break-l0";
             }
-            for (var _i = 0, _a = []; _i < _a.length; _i++) {
-                var b = _a[_i];
-                _b = [{ x: 1, y: 2 }][0], x = _b.x, z = _b.y;
-                if (b === 1) {
-                    break;
-                }
-                if (b === 2) {
-                    return "break-l0";
-                }
-                l1: if (b === 3) {
-                    break l1;
-                }
-                return { value: 50 };
+            l1: if (b === 3) {
+                break l1;
             }
-            var _loop_4 = function(b) {
-                _c = [{ x1: 1, y: arguments_1.length }][0], x1 = _c.x1, z1 = _c.y;
-                if (b === 1) {
-                    return "break";
-                }
-                if (b === 2) {
-                    return "break-l0";
-                }
-                return { value: 100 };
-                (function () { return b; });
-            };
-            for (var _d = 0, _e = []; _d < _e.length; _d++) {
-                var b = _e[_d];
-                var state_3 = _loop_4(b);
-                if (typeof state_3 === "object") return state_3;
-                if (state_3 === "break") break;
-                switch(state_3) {
-                    case "break-l0": return state_3;
-                }
+            return { value: 50 };
+        }
+        var _loop_4 = function(b) {
+            _c = [{ x1: 1, y: arguments_1.length }][0], x1 = _c.x1, z1 = _c.y;
+            if (b === 1) {
+                return "break";
             }
-            (function () { return a; });
+            if (b === 2) {
+                return "break-l0";
+            }
+            return { value: 100 };
+            (function () { return b; });
         };
-        var arguments_1 = arguments;
-        var x, z, x1, z1;
-        for (var _f = 0, _g = []; _f < _g.length; _f++) {
-            var a = _g[_f];
-            var state_4 = _loop_3(a);
-            if (typeof state_4 === "object") return state_4.value
-            if (state_4 === "break") break;
-            switch(state_4) {
-                case "break-l0": break l0;
+        for (var _d = 0, _e = []; _d < _e.length; _d++) {
+            var b = _e[_d];
+            var state_3 = _loop_4(b);
+            if (typeof state_3 === "object") return state_3;
+            if (state_3 === "break") break;
+            switch(state_3) {
+                case "break-l0": return state_3;
             }
+        }
+        (function () { return a; });
+    };
+    var arguments_1 = arguments;
+    var x, z, x1, z1;
+    l0: for (var _f = 0, _g = []; _f < _g.length; _f++) {
+        var a = _g[_f];
+        var state_4 = _loop_3(a);
+        if (typeof state_4 === "object") return state_4.value
+        if (state_4 === "break") break;
+        switch(state_4) {
+            case "break-l0": break l0;
         }
     }
     use(x);
