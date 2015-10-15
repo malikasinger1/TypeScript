@@ -207,7 +207,6 @@ namespace ts {
     };
 
     export function createCompilerHost(options: CompilerOptions, setParentNodes?: boolean): CompilerHost {
-        let currentDirectory: string;
         let existingDirectories: Map<boolean> = {};
 
         function getCanonicalFileName(fileName: string): string {
@@ -277,7 +276,7 @@ namespace ts {
             getSourceFile,
             getDefaultLibFileName: options => combinePaths(getDirectoryPath(normalizePath(sys.getExecutingFilePath())), getDefaultLibFileName(options)),
             writeFile,
-            getCurrentDirectory: () => currentDirectory || (currentDirectory = sys.getCurrentDirectory()),
+            getCurrentDirectory: memoize(() => sys.getCurrentDirectory()),
             useCaseSensitiveFileNames: () => sys.useCaseSensitiveFileNames,
             getCanonicalFileName,
             getNewLine: () => newLine,
@@ -342,9 +341,14 @@ namespace ts {
 
         host = host || createCompilerHost(options);
 
+        const currentDirectory = host.getCurrentDirectory();
         const resolveModuleNamesWorker = host.resolveModuleNames
-            ? ((moduleNames: string[], containingFile: string) => host.resolveModuleNames(moduleNames, containingFile))
-            : ((moduleNames: string[], containingFile: string) => map(moduleNames, moduleName => resolveModuleName(moduleName, containingFile, options, host).resolvedModule));
+            ? ((moduleNames: string[], containingFile: string) => {
+                return host.resolveModuleNames(moduleNames, getNormalizedAbsolutePath(containingFile, currentDirectory));
+            })
+            : ((moduleNames: string[], containingFile: string) => {
+                return map(moduleNames, moduleName => resolveModuleName(moduleName, getNormalizedAbsolutePath(containingFile, currentDirectory), options, host).resolvedModule);
+            });
 
         let filesByName = createFileMap<SourceFile>(fileName => host.getCanonicalFileName(fileName));
 
@@ -394,7 +398,7 @@ namespace ts {
             getDiagnosticsProducingTypeChecker,
             getCommonSourceDirectory: () => commonSourceDirectory,
             emit,
-            getCurrentDirectory: () => host.getCurrentDirectory(),
+            getCurrentDirectory: () => currentDirectory,
             getNodeCount: () => getDiagnosticsProducingTypeChecker().getNodeCount(),
             getIdentifierCount: () => getDiagnosticsProducingTypeChecker().getIdentifierCount(),
             getSymbolCount: () => getDiagnosticsProducingTypeChecker().getSymbolCount(),
@@ -511,7 +515,7 @@ namespace ts {
                 getCanonicalFileName: fileName => host.getCanonicalFileName(fileName),
                 getCommonSourceDirectory: program.getCommonSourceDirectory,
                 getCompilerOptions: program.getCompilerOptions,
-                getCurrentDirectory: () => host.getCurrentDirectory(),
+                getCurrentDirectory: () => currentDirectory,
                 getNewLine: () => host.getNewLine(),
                 getSourceFile: program.getSourceFile,
                 getSourceFiles: program.getSourceFiles,
@@ -564,7 +568,7 @@ namespace ts {
         function getSourceFile(fileName: string) {
             // first try to use file name as is to find file
             // then try to convert relative file name to absolute and use it to retrieve source file
-            return filesByName.get(fileName) || filesByName.get(getNormalizedAbsolutePath(fileName, host.getCurrentDirectory()));
+            return filesByName.get(fileName) || filesByName.get(getNormalizedAbsolutePath(fileName, currentDirectory));
         }
 
         function getDiagnosticsHelper(
@@ -776,7 +780,7 @@ namespace ts {
                 return getSourceFileFromCache(fileName, /*useAbsolutePath*/ false);
             }
 
-            let normalizedAbsolutePath = getNormalizedAbsolutePath(fileName, host.getCurrentDirectory());
+            let normalizedAbsolutePath = getNormalizedAbsolutePath(fileName, currentDirectory);
             if (filesByName.contains(normalizedAbsolutePath)) {
                 const file = getSourceFileFromCache(normalizedAbsolutePath, /*useAbsolutePath*/ true);
                 // we don't have resolution for this relative file name but the match was found by absolute file name
@@ -825,7 +829,7 @@ namespace ts {
             function getSourceFileFromCache(fileName: string, useAbsolutePath: boolean): SourceFile {
                 let file = filesByName.get(fileName);
                 if (file && host.useCaseSensitiveFileNames()) {
-                    let sourceFileName = useAbsolutePath ? getNormalizedAbsolutePath(file.fileName, host.getCurrentDirectory()) : file.fileName;
+                    let sourceFileName = useAbsolutePath ? getNormalizedAbsolutePath(file.fileName, currentDirectory) : file.fileName;
                     if (normalizeSlashes(fileName) !== normalizeSlashes(sourceFileName)) {
                         if (refFile !== undefined && refPos !== undefined && refEnd !== undefined) {
                             fileProcessingDiagnostics.add(createFileDiagnostic(refFile, refPos, refEnd - refPos,
@@ -888,7 +892,6 @@ namespace ts {
 
         function computeCommonSourceDirectory(sourceFiles: SourceFile[]): string {
             let commonPathComponents: string[];
-            let currentDirectory = host.getCurrentDirectory();
             forEach(files, sourceFile => {
                 // Each file contributes into common source file path
                 if (isDeclarationFile(sourceFile)) {
@@ -929,7 +932,6 @@ namespace ts {
         function checkSourceFilesBelongToPath(sourceFiles: SourceFile[], rootDirectory: string): boolean {
             let allFilesBelongToPath = true;
             if (sourceFiles) {
-                let currentDirectory = host.getCurrentDirectory();
                 let absoluteRootDirectoryPath = host.getCanonicalFileName(getNormalizedAbsolutePath(rootDirectory, currentDirectory));
 
                 for (var sourceFile of sourceFiles) {
@@ -1034,7 +1036,7 @@ namespace ts {
 
                 if (options.rootDir && checkSourceFilesBelongToPath(files, options.rootDir)) {
                     // If a rootDir is specified and is valid use it as the commonSourceDirectory
-                    commonSourceDirectory = getNormalizedAbsolutePath(options.rootDir, host.getCurrentDirectory());
+                    commonSourceDirectory = getNormalizedAbsolutePath(options.rootDir, currentDirectory);
                 }
                 else {
                     // Compute the commonSourceDirectory from the input files
