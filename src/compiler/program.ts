@@ -351,6 +351,9 @@ namespace ts {
             });
 
         let filesByName = createFileMap<SourceFile>(fileName => host.getCanonicalFileName(fileName));
+        // stores 'filename -> file association' ignoring case
+        // used to track cases when two file names differ only in casing 
+        let filesByNameIgnoreCase = host.useCaseSensitiveFileNames() ? createFileMap<SourceFile>(fileName => fileName.toLowerCase()): undefined;
 
         if (oldProgram) {
             // check properties that can affect structure of the program or module resolution strategy
@@ -496,7 +499,7 @@ namespace ts {
 
             // update fileName -> file mapping
             for (let file of newSourceFiles) {
-                filesByName.set(file.fileName, file);
+                filesByName.set(getNormalizedAbsolutePath(file.fileName, currentDirectory), file);
             }
 
             files = newSourceFiles;
@@ -565,10 +568,8 @@ namespace ts {
             return emitResult;
         }
 
-        function getSourceFile(fileName: string) {
-            // first try to use file name as is to find file
-            // then try to convert relative file name to absolute and use it to retrieve source file
-            return filesByName.get(fileName) || filesByName.get(getNormalizedAbsolutePath(fileName, currentDirectory));
+        function getSourceFile(fileName: string): SourceFile {
+            return filesByName.get(getNormalizedAbsolutePath(fileName, currentDirectory));
         }
 
         function getDiagnosticsHelper(
@@ -773,21 +774,40 @@ namespace ts {
             }
         }
 
+        function reportFileNamesDifferOnlyInCasingError(fileName: string, existingFileName: string, refFile: SourceFile, refPos: number, refEnd: number): void {
+            if (refFile !== undefined && refPos !== undefined && refEnd !== undefined) {
+                fileProcessingDiagnostics.add(createFileDiagnostic(refFile, refPos, refEnd - refPos,
+                    Diagnostics.File_name_0_differs_from_already_included_file_name_1_only_in_casing, fileName, existingFileName));
+            }
+            else {
+                fileProcessingDiagnostics.add(createCompilerDiagnostic(Diagnostics.File_name_0_differs_from_already_included_file_name_1_only_in_casing, fileName, existingFileName));
+            }
+        }
+
         // Get source file from normalized fileName
         function findSourceFile(fileName: string, isDefaultLib: boolean, refFile?: SourceFile, refPos?: number, refEnd?: number): SourceFile {
-            if (filesByName.contains(fileName)) {
-                // We've already looked for this file, use cached result
-                return getSourceFileFromCache(fileName, /*useAbsolutePath*/ false);
-            }
-
             let normalizedAbsolutePath = getNormalizedAbsolutePath(fileName, currentDirectory);
             if (filesByName.contains(normalizedAbsolutePath)) {
-                const file = getSourceFileFromCache(normalizedAbsolutePath, /*useAbsolutePath*/ true);
-                // we don't have resolution for this relative file name but the match was found by absolute file name
-                // store resolution for relative name as well 
-                filesByName.set(fileName, file);
+                const file = filesByName.get(normalizedAbsolutePath);
+                // on case-sensitive file systems this check is never triggered since names are guaranteed to match.
+                // on case-insensitive file systems this check captures the case when one file is references from different locations
+                // and references differ in casing.
+                // filesByName will use canonical file name as a key meaning that 'a.ts' and 'A.ts' will refer to the same file.
+                if (file && options.caseSensitiveFileNames && getNormalizedAbsolutePath(file.fileName, currentDirectory) !== normalizedAbsolutePath) {
+                    reportFileNamesDifferOnlyInCasingError(fileName, file.fileName, refFile, refPos, refEnd);
+                }
+
                 return file;
             }
+
+            if (host.useCaseSensitiveFileNames() && filesByNameIgnoreCase.contains(normalizedAbsolutePath)) {
+                const file = filesByNameIgnoreCase.get(normalizedAbsolutePath);
+                reportFileNamesDifferOnlyInCasingError(fileName, file.fileName, refFile, refPos, refEnd);
+            }
+
+            // at this point we know for sure that we have not seen file with absolute path=normalizedAbsolutePath. This means
+            // - on case insensitive file systems - only one file can be located at normalizedAbsolutePath and we have not read it yet
+            // - on case sensitive file systems - we might read the file from the path that differs in casing
 
             // We haven't looked for this file, do so now and cache result
             let file = host.getSourceFile(fileName, options.target, hostErrorMessage => {
@@ -800,12 +820,13 @@ namespace ts {
                 }
             });
 
-            filesByName.set(fileName, file);
+            filesByName.set(normalizedAbsolutePath, file);
             if (file) {
-                skipDefaultLib = skipDefaultLib || file.hasNoDefaultLib;
+                if (host.useCaseSensitiveFileNames() && !filesByNameIgnoreCase.contains(normalizedAbsolutePath)) {
+                    filesByNameIgnoreCase.set(normalizedAbsolutePath, file);
+                }
 
-                // Set the source file for normalized absolute path
-                filesByName.set(normalizedAbsolutePath, file);
+                skipDefaultLib = skipDefaultLib || file.hasNoDefaultLib;
 
                 let basePath = getDirectoryPath(fileName);
                 if (!options.noResolve) {
