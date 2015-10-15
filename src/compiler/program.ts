@@ -800,11 +800,6 @@ namespace ts {
                 return file;
             }
 
-            if (host.useCaseSensitiveFileNames() && filesByNameIgnoreCase.contains(normalizedAbsolutePath)) {
-                const file = filesByNameIgnoreCase.get(normalizedAbsolutePath);
-                reportFileNamesDifferOnlyInCasingError(fileName, file.fileName, refFile, refPos, refEnd);
-            }
-
             // at this point we know for sure that we have not seen file with absolute path=normalizedAbsolutePath. This means
             // - on case insensitive file systems - only one file can be located at normalizedAbsolutePath and we have not read it yet
             // - on case sensitive file systems - we might read the file from the path that differs in casing
@@ -822,8 +817,14 @@ namespace ts {
 
             filesByName.set(normalizedAbsolutePath, file);
             if (file) {
-                if (host.useCaseSensitiveFileNames() && !filesByNameIgnoreCase.contains(normalizedAbsolutePath)) {
-                    filesByNameIgnoreCase.set(normalizedAbsolutePath, file);
+                if (host.useCaseSensitiveFileNames()) {
+                    const existingFile = filesByNameIgnoreCase.get(normalizedAbsolutePath);
+                    if (existingFile) {
+                        reportFileNamesDifferOnlyInCasingError(fileName, existingFile.fileName, refFile, refPos, refEnd);
+                    }
+                    else {
+                        filesByNameIgnoreCase.set(normalizedAbsolutePath, file);
+                    }
                 }
 
                 skipDefaultLib = skipDefaultLib || file.hasNoDefaultLib;
